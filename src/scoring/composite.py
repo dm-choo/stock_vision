@@ -10,6 +10,8 @@ fundamental_score (0~100) × fund_weight
 
 import pandas as pd
 
+MIN_VALID_FACTORS = 3  # 이 수 미만의 유효 팩터를 가진 종목은 결과에서 제외
+
 _OUTPUT_COLS = [
     "rank",
     "ticker",
@@ -18,6 +20,7 @@ _OUTPUT_COLS = [
     "composite_score",
     "fundamental_score",
     "technical_score",
+    "valid_factor_count",
     # 펀더멘탈 세부
     "roe_score",
     "per_score",
@@ -57,6 +60,13 @@ def compute_composite_score(
       composite_score 기준 내림차순 정렬된 DataFrame
     """
     merged = fundamental_df.merge(technical_df, on="ticker", how="inner")
+
+    # 유효 팩터 수가 기준 미만인 종목 제외 (데이터 부족으로 신뢰도 낮음)
+    if "valid_factor_count" in merged.columns:
+        excluded = merged[merged["valid_factor_count"] < MIN_VALID_FACTORS]["ticker"].tolist()
+        if excluded:
+            print(f"[필터] 유효 팩터 {MIN_VALID_FACTORS}개 미만 제외 ({len(excluded)}개): {excluded}")
+        merged = merged[merged["valid_factor_count"] >= MIN_VALID_FACTORS].copy()
 
     merged["composite_score"] = (
         merged["fundamental_score"] * fund_weight

@@ -96,6 +96,8 @@ def compute_fundamental_scores(df: pd.DataFrame) -> pd.DataFrame:
     )
     # NaN 위치의 가중치를 0으로 → 유효한 팩터만 합산 후 재정규화
     valid_mask = score_matrix.notna()
+    result["valid_factor_count"] = valid_mask.sum(axis=1)
+
     adjusted_weights = weight_matrix.where(valid_mask, 0)
     weight_sum = adjusted_weights.sum(axis=1).replace(0, np.nan)
     weighted_scores = (score_matrix.fillna(0) * adjusted_weights).sum(axis=1)
