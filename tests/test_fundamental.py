@@ -103,3 +103,47 @@ def test_sector_fillna_unknown(sample_fundamentals):
     df.loc[0, "sector"] = np.nan
     result = compute_fundamental_scores(df)
     assert result.loc[0, "sector"] == "Unknown"
+
+
+# ── 신규 팩터 테스트 ──────────────────────────────────────────────────
+
+def test_ev_ebitda_negative_yields_nan_score():
+    """음수 EV/EBITDA는 ev_ebitda_score가 NaN이어야 한다."""
+    df = pd.DataFrame({
+        "ticker": ["A", "B"],
+        "sector": ["Tech", "Tech"],
+        "per": [15.0, 20.0],
+        "pbr": [2.0, 3.0],
+        "roe": [0.15, 0.10],
+        "revenue_growth": [0.10, 0.05],
+        "debt_to_equity": [50.0, 80.0],
+        "fcf_yield": [0.05, 0.03],
+        "op_margin": [0.20, 0.15],
+        "ev_ebitda": [-5.0, 12.0],  # A는 음수 → NaN 처리 대상
+    })
+    result = compute_fundamental_scores(df)
+    a_score = result.loc[result["ticker"] == "A", "ev_ebitda_score"].values[0]
+    assert np.isnan(a_score), "음수 EV/EBITDA는 ev_ebitda_score가 NaN이어야 함"
+
+
+def test_clip_percentile_reduces_outlier_impact():
+    """5~95 percentile 클리핑 후 점수 분포가 1~99 클리핑보다 균등해야 한다."""
+    from src.factors.fundamental import _sector_relative_ratio
+    rng = np.random.default_rng(42)
+    n = 100
+    df = pd.DataFrame({
+        "sector": ["Tech"] * n,
+        "roe": np.concatenate([rng.normal(0.15, 0.05, n - 2), [10.0, -5.0]]),  # 이상치 포함
+    })
+    # 5~95 클리핑 (강한 클리핑)
+    ratio_strict = _sector_relative_ratio(df, "roe", "higher", clip_pct=(0.05, 0.95))
+    # 1~99 클리핑 (약한 클리핑)
+    ratio_loose = _sector_relative_ratio(df, "roe", "higher", clip_pct=(0.01, 0.99))
+    # 강한 클리핑이 범위가 더 좁아야 함
+    assert ratio_strict.max() - ratio_strict.min() <= ratio_loose.max() - ratio_loose.min()
+
+
+def test_factor_config_weights_sum_to_one():
+    """FACTOR_CONFIG의 모든 가중치 합계는 1.0이어야 한다."""
+    total = sum(w for _, _, w, _ in FACTOR_CONFIG)
+    assert total == pytest.approx(1.0, rel=1e-6)

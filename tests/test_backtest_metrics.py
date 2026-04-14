@@ -10,9 +10,12 @@ import pytest
 
 from src.backtest.metrics import (
     cagr,
+    calmar_ratio,
     compute_all_metrics,
+    information_ratio,
     max_drawdown,
     sharpe_ratio,
+    sortino_ratio,
     win_rate,
 )
 
@@ -141,7 +144,66 @@ def test_compute_all_metrics_keys():
     q_bench = pd.Series(rng.normal(0.025, 0.05, 8), index=q_idx)
 
     result = compute_all_metrics(port_v, bench_v, q_port, q_bench)
-    expected_keys = {"cagr", "benchmark_cagr", "alpha", "sharpe",
-                     "benchmark_sharpe", "max_drawdown", "benchmark_mdd",
-                     "win_rate", "total_quarters"}
+    expected_keys = {
+        "cagr", "benchmark_cagr", "alpha",
+        "sharpe", "benchmark_sharpe",
+        "sortino", "benchmark_sortino",
+        "calmar", "information_ratio",
+        "max_drawdown", "benchmark_mdd",
+        "win_rate", "total_quarters",
+    }
     assert expected_keys == set(result.keys())
+
+
+# ── Sortino Ratio ────────────────────────────────────────────────────
+
+def test_sortino_positive_drift_is_positive():
+    """양의 드리프트 → Sortino > 0."""
+    rng = np.random.default_rng(1)
+    returns = [0.003 + n for n in rng.normal(0.0, 0.005, 252)]
+    s = _make_value(returns)
+    assert sortino_ratio(s) > 0
+
+
+def test_sortino_zero_variance_returns_nan():
+    """하방 수익률이 없으면 (모두 양수) Sortino는 NaN이어야 한다."""
+    # 매일 정확히 같은 양의 수익률 → 하방 편차 = 0
+    s = _make_value([0.001] * 252)
+    result = sortino_ratio(s)
+    assert np.isnan(result)
+
+
+# ── Calmar Ratio ──────────────────────────────────────────────────────
+
+def test_calmar_no_mdd_returns_nan():
+    """MDD = 0이면 Calmar는 NaN이어야 한다."""
+    s = _make_value([0.01] * 100)  # 단조 상승 → MDD = 0
+    assert np.isnan(calmar_ratio(s))
+
+
+def test_calmar_positive_for_uptrend_with_drawdown():
+    """상승 추세 + 낙폭 존재 시 Calmar > 0."""
+    rng = np.random.default_rng(99)
+    returns = rng.normal(0.002, 0.02, 504)
+    s = _make_value(returns.tolist())
+    if max_drawdown(s) < 0:  # 낙폭이 실제로 발생한 경우만 검증
+        assert calmar_ratio(s) > 0
+
+
+# ── Information Ratio ─────────────────────────────────────────────────
+
+def test_ir_all_outperform():
+    """초과수익이 항상 양수인 경우 IR > 0."""
+    idx = pd.date_range("2021-01-01", periods=8, freq="QE")
+    # 초과수익이 변동하지만 항상 양수 → std > 0, mean > 0 → IR > 0
+    port  = pd.Series([0.05, 0.07, 0.04, 0.06, 0.08, 0.03, 0.09, 0.05], index=idx)
+    bench = pd.Series([0.03, 0.05, 0.02, 0.04, 0.06, 0.01, 0.07, 0.03], index=idx)
+    assert information_ratio(port, bench) > 0
+
+
+def test_ir_insufficient_quarters_returns_nan():
+    """분기 수 < 4이면 IR은 NaN이어야 한다."""
+    idx = pd.date_range("2021-01-01", periods=3, freq="QE")
+    port = pd.Series([0.05, 0.04, 0.06], index=idx)
+    bench = pd.Series([0.03, 0.02, 0.04], index=idx)
+    assert np.isnan(information_ratio(port, bench))

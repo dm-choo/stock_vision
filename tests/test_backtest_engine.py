@@ -136,3 +136,38 @@ def test_hybrid_without_fundamentals_raises(uptrend_prices):
     """hybrid 모드에서 fundamentals=None이면 ValueError가 발생해야 한다."""
     with pytest.raises(ValueError, match="fundamentals"):
         run_backtest(uptrend_prices, top_n=3, mode="hybrid", fundamentals=None)
+
+
+# ── IPO 필터 ──────────────────────────────────────────────────────────
+
+def test_ipo_filter_excludes_new_ticker(uptrend_prices):
+    """
+    리밸런싱 시점에 min_history_days 미만 거래일이 있는 신규 종목은
+    선택된 보유 종목에 포함되지 않아야 한다.
+    """
+    # 기존 데이터에 마지막 100거래일만 있는 신규 종목 추가
+    new_ticker_prices = uptrend_prices.copy()
+    new_ticker_prices["NEW_IPO"] = float("nan")
+    new_ticker_prices.iloc[-100:, -1] = 100.0  # 마지막 100일만 데이터 존재
+
+    result = run_backtest(new_ticker_prices, top_n=5, mode="technical", min_history_days=252)
+    all_holdings = [t for h in result.holdings for t in h["tickers"]]
+    assert "NEW_IPO" not in all_holdings, "min_history_days 미만 종목은 보유에서 제외되어야 함"
+
+
+# ── 거래비용 ─────────────────────────────────────────────────────────
+
+def test_transaction_cost_reduces_cagr(uptrend_prices):
+    """거래비용이 있으면 없을 때보다 CAGR이 낮아야 한다."""
+    result_no_cost = run_backtest(uptrend_prices, top_n=3, mode="technical", transaction_cost=0.0)
+    result_with_cost = run_backtest(uptrend_prices, top_n=3, mode="technical", transaction_cost=0.01)
+    assert result_with_cost.metrics["cagr"] < result_no_cost.metrics["cagr"], \
+        "거래비용 적용 시 CAGR이 감소해야 함"
+
+
+def test_avg_turnover_in_metrics(uptrend_prices):
+    """metrics에 avg_turnover 키가 포함되어야 한다."""
+    result = run_backtest(uptrend_prices, top_n=3, mode="technical")
+    assert "avg_turnover" in result.metrics
+    assert "total_cost_drag" in result.metrics
+    assert 0.0 <= result.metrics["avg_turnover"] <= 2.0

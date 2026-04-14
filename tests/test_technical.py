@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.factors.technical import _rsi, _rsi_score, compute_technical_factors
+from src.factors.technical import _rsi, _rsi_score, compute_technical_factors, TECH_WEIGHTS
 
 
 # ── RSI 공식 단위 테스트 ──────────────────────────────────────────────
@@ -62,18 +62,16 @@ def test_full_tickers_included(sample_prices):
 
 def test_momentum_calculation():
     """
-    선형 상승 가격으로 3개월 모멘텀 수동 검증.
-    250거래일 동안 100 → 200으로 상승: 마지막 값=200, 63일전=약 147 → mom_3m ≈ 0.36
+    선형 상승 가격으로 6개월 모멘텀 수동 검증.
+    250거래일 동안 100 → 200으로 상승: 마지막 값=200, 126일전=149.8 → mom_6m ≈ 0.334
     """
     dates = pd.bdate_range(end="2025-12-31", periods=250)
-    prices = pd.DataFrame(
-        {"LINEAR": np.linspace(100, 200, 250)},
-        index=dates,
-    )
+    prices_linear = np.linspace(100, 200, 250)
+    prices = pd.DataFrame({"LINEAR": prices_linear}, index=dates)
     result = compute_technical_factors(prices)
     assert not result.empty
-    mom = result.loc[result["ticker"] == "LINEAR", "mom_3m"].values[0]
-    expected = (200 / np.linspace(100, 200, 250)[-63]) - 1
+    mom = result.loc[result["ticker"] == "LINEAR", "mom_6m"].values[0]
+    expected = (prices_linear[-1] / prices_linear[-126]) - 1
     assert mom == pytest.approx(expected, rel=1e-3)
 
 
@@ -109,3 +107,48 @@ def test_technical_score_range(sample_prices):
     scores = result["technical_score"].dropna()
     assert (scores >= 0).all() and (scores <= 100).all(), \
         f"점수 범위 초과: min={scores.min():.2f}, max={scores.max():.2f}"
+
+
+# ── 신규 지표 테스트 ──────────────────────────────────────────────────
+
+def test_mom_12_1_positive_on_uptrend():
+    """꾸준히 상승하는 가격에서 mom_12_1은 양수여야 한다."""
+    dates = pd.bdate_range(end="2025-12-31", periods=260)
+    prices = pd.DataFrame({"UP": np.linspace(100, 200, 260)}, index=dates)
+    result = compute_technical_factors(prices)
+    mom = result.loc[result["ticker"] == "UP", "mom_12_1"].values[0]
+    assert mom > 0, f"상승 추세에서 mom_12_1은 양수여야 함: {mom}"
+
+
+def test_mom_12_1_negative_on_downtrend():
+    """꾸준히 하락하는 가격에서 mom_12_1은 음수여야 한다."""
+    dates = pd.bdate_range(end="2025-12-31", periods=260)
+    prices = pd.DataFrame({"DOWN": np.linspace(200, 100, 260)}, index=dates)
+    result = compute_technical_factors(prices)
+    mom = result.loc[result["ticker"] == "DOWN", "mom_12_1"].values[0]
+    assert mom < 0, f"하락 추세에서 mom_12_1은 음수여야 함: {mom}"
+
+
+def test_consistency_high_on_all_up():
+    """매일 상승하는 가격에서 consistency는 1.0에 가까워야 한다."""
+    dates = pd.bdate_range(end="2025-12-31", periods=250)
+    prices = pd.DataFrame({"ALLUP": np.linspace(100, 200, 250)}, index=dates)
+    result = compute_technical_factors(prices)
+    cons = result.loc[result["ticker"] == "ALLUP", "consistency"].values[0]
+    assert cons > 0.9, f"매일 상승 시 consistency는 0.9 이상이어야 함: {cons}"
+
+
+def test_volatility_adjusted_mom_nan_on_zero_vol():
+    """변동성이 0이면 mom_3m_adj는 NaN이어야 한다 (0으로 나누기 방지)."""
+    dates = pd.bdate_range(end="2025-12-31", periods=250)
+    # 완전히 flat한 가격 → 변동성 0
+    prices = pd.DataFrame({"FLAT": np.ones(250) * 100.0}, index=dates)
+    result = compute_technical_factors(prices)
+    adj = result.loc[result["ticker"] == "FLAT", "mom_3m_adj"].values[0]
+    assert np.isnan(adj), "변동성이 0이면 mom_3m_adj는 NaN이어야 함"
+
+
+def test_tech_weights_sum_to_one():
+    """TECH_WEIGHTS 가중치 합계는 1.0이어야 한다."""
+    total = sum(TECH_WEIGHTS.values())
+    assert total == pytest.approx(1.0, rel=1e-6)
