@@ -31,6 +31,7 @@ def _sector_relative_ratio(df: pd.DataFrame, col: str, direction: str) -> pd.Ser
     - 음수 PER/PBR(적자 종목) 등 의미 없는 값은 NaN 처리.
     - direction='higher': stock / sector_avg
     - direction='lower' : sector_avg / stock
+    - 'Unknown' 섹터 종목은 전체 유니버스 평균을 기준으로 비교.
     """
     series = df[col].copy()
 
@@ -41,6 +42,17 @@ def _sector_relative_ratio(df: pd.DataFrame, col: str, direction: str) -> pd.Ser
     sector_avg = df.groupby("sector")[col].transform(
         lambda x: x[x > 0].mean() if col in ("per", "pbr") else x.mean()
     )
+
+    # Unknown 섹터: 섹터 평균 대신 전체 유니버스 평균으로 대체
+    # (단일 섹터로 묶여 서로만 비교되는 왜곡 방지)
+    unknown_mask = df["sector"] == "Unknown"
+    if unknown_mask.any():
+        if col in ("per", "pbr"):
+            global_avg = series[series > 0].mean()
+        else:
+            global_avg = series.mean()
+        sector_avg = sector_avg.copy()
+        sector_avg[unknown_mask] = global_avg
 
     # 섹터 평균이 0이거나 NaN이면 비교 불가 → NaN
     sector_avg = sector_avg.replace(0, np.nan)
