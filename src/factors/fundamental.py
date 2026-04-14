@@ -15,39 +15,51 @@
 import numpy as np
 import pandas as pd
 
-# 지표별 (컬럼명, 방향, 최종점수 가중치)
-FACTOR_CONFIG = [
-    ("roe", "higher", 0.25),
-    ("per", "lower", 0.25),
-    ("pbr", "lower", 0.15),
-    ("revenue_growth", "higher", 0.25),
-    ("debt_to_equity", "lower", 0.10),
+# 지표별 (컬럼명, 방향, 최종점수 가중치, 클리핑 percentile)
+FACTOR_CONFIG: list[tuple[str, str, float, tuple[float, float]]] = [
+    ("roe",            "higher", 0.20, (0.05, 0.95)),
+    ("per",            "lower",  0.20, (0.05, 0.95)),
+    ("pbr",            "lower",  0.10, (0.05, 0.95)),
+    ("revenue_growth", "higher", 0.20, (0.05, 0.90)),  # 성장률 상단 더 강하게 클리핑
+    ("debt_to_equity", "lower",  0.10, (0.05, 0.95)),
+    ("fcf_yield",      "higher", 0.10, (0.05, 0.95)),  # FCF 수익률 (실제 현금창출 능력)
+    ("op_margin",      "higher", 0.05, (0.05, 0.95)),  # 영업이익률 (비즈니스 수익성)
+    ("ev_ebitda",      "lower",  0.05, (0.05, 0.95)),  # EV/EBITDA (부채 중립 밸류에이션)
 ]
 
+# 음수 값이 무의미한 지표 목록 (음수 → NaN 처리)
+_NEGATIVE_INVALID_COLS = ("per", "pbr", "ev_ebitda")
 
-def _sector_relative_ratio(df: pd.DataFrame, col: str, direction: str) -> pd.Series:
+
+def _sector_relative_ratio(
+    df: pd.DataFrame,
+    col: str,
+    direction: str,
+    clip_pct: tuple[float, float] = (0.05, 0.95),
+) -> pd.Series:
     """
     섹터 평균 대비 비율 계산.
     - 음수 PER/PBR(적자 종목) 등 의미 없는 값은 NaN 처리.
     - direction='higher': stock / sector_avg
     - direction='lower' : sector_avg / stock
     - 'Unknown' 섹터 종목은 전체 유니버스 평균을 기준으로 비교.
+    - clip_pct: 아웃라이어 제거 percentile 범위 (기본 5~95%)
     """
     series = df[col].copy()
 
-    # PER, PBR은 음수면 무의미 → NaN
-    if col in ("per", "pbr"):
+    # 음수 값이 무의미한 지표 처리 → NaN
+    if col in _NEGATIVE_INVALID_COLS:
         series = series.where(series > 0, other=np.nan)
 
     sector_avg = df.groupby("sector")[col].transform(
-        lambda x: x[x > 0].mean() if col in ("per", "pbr") else x.mean()
+        lambda x: x[x > 0].mean() if col in _NEGATIVE_INVALID_COLS else x.mean()
     )
 
     # Unknown 섹터: 섹터 평균 대신 전체 유니버스 평균으로 대체
     # (단일 섹터로 묶여 서로만 비교되는 왜곡 방지)
     unknown_mask = df["sector"] == "Unknown"
     if unknown_mask.any():
-        if col in ("per", "pbr"):
+        if col in _NEGATIVE_INVALID_COLS:
             global_avg = series[series > 0].mean()
         else:
             global_avg = series.mean()
@@ -62,8 +74,8 @@ def _sector_relative_ratio(df: pd.DataFrame, col: str, direction: str) -> pd.Ser
     else:
         ratio = sector_avg / series.replace(0, np.nan)
 
-    # 극단적 아웃라이어 제거 (1~99 percentile 클리핑)
-    lo, hi = ratio.quantile(0.01), ratio.quantile(0.99)
+    # 아웃라이어 제거 (clip_pct 범위 클리핑)
+    lo, hi = ratio.quantile(clip_pct[0]), ratio.quantile(clip_pct[1])
     return ratio.clip(lo, hi)
 
 
@@ -80,11 +92,11 @@ def compute_fundamental_scores(df: pd.DataFrame) -> pd.DataFrame:
     score_cols = []
     weights = []
 
-    for col, direction, weight in FACTOR_CONFIG:
+    for col, direction, weight, clip_pct in FACTOR_CONFIG:
         if col not in result.columns:
             continue
 
-        ratio = _sector_relative_ratio(result, col, direction)
+        ratio = _sector_relative_ratio(result, col, direction, clip_pct=clip_pct)
         score_col = f"{col}_score"
 
         # percentile rank → 0~100 점수
