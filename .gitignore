@@ -1,0 +1,20 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Cached market data
+data/us/
+data/kr/
+
+# Claude Code
+CLAUDE.md
+
+# Lock file
+uv.lock
