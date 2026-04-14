@@ -14,3 +14,14 @@ dependencies = [
     "tqdm>=4.67",
     "pyarrow>=18.0",
 ]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0",
+    "pytest-cov>=6.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+pythonpath = ["."]
