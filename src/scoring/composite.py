@@ -1,9 +1,10 @@
 """
 최종 복합 스코어 산출
 
-fundamental_score (0~100) × fund_weight
-+ technical_score (0~100) × tech_weight
-= composite_score (0~100)
+fundamental_score와 technical_score는 각각 분산이 다르기 때문에
+단순 가중합 시 분산이 큰 쪽이 실제 영향력을 더 갖게 됨.
+합산 전 두 점수를 각각 percentile rank(0~100)로 재정규화해
+동일한 분산 구조를 보장한 뒤 가중합.
 
 기본 가중치: 펀더멘탈 60%, 기술적 40%
 """
@@ -46,6 +47,11 @@ _OUTPUT_COLS = [
 ]
 
 
+def _percentile_rank(series: pd.Series) -> pd.Series:
+    """0~100 percentile rank로 재정규화 (분포를 균일하게 만들어 분산 통일)"""
+    return series.rank(pct=True, na_option="keep") * 100
+
+
 def compute_composite_score(
     fundamental_df: pd.DataFrame,
     technical_df: pd.DataFrame,
@@ -58,6 +64,9 @@ def compute_composite_score(
       technical_df    compute_technical_factors() 결과
     출력:
       composite_score 기준 내림차순 정렬된 DataFrame
+
+    fundamental_score, technical_score 원본은 그대로 유지하고,
+    합산 시에는 percentile 재정규화된 값을 사용해 분산 차이를 보정.
     """
     merged = fundamental_df.merge(technical_df, on="ticker", how="inner")
 
@@ -68,10 +77,11 @@ def compute_composite_score(
             print(f"[필터] 유효 팩터 {MIN_VALID_FACTORS}개 미만 제외 ({len(excluded)}개): {excluded}")
         merged = merged[merged["valid_factor_count"] >= MIN_VALID_FACTORS].copy()
 
-    merged["composite_score"] = (
-        merged["fundamental_score"] * fund_weight
-        + merged["technical_score"] * tech_weight
-    )
+    # 분산 보정: 각 점수를 percentile rank로 재정규화 후 가중합
+    # (원본 점수는 참고용으로 보존)
+    fund_norm = _percentile_rank(merged["fundamental_score"])
+    tech_norm = _percentile_rank(merged["technical_score"])
+    merged["composite_score"] = fund_norm * fund_weight + tech_norm * tech_weight
 
     merged["rank"] = (
         merged["composite_score"].rank(ascending=False, method="min").astype(int)
