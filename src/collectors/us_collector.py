@@ -8,6 +8,7 @@
 import io
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
@@ -49,6 +50,10 @@ def fetch_fundamentals(tickers: list[str], use_cache: bool = True) -> pd.DataFra
     for ticker in tqdm(tickers, desc="Fetching US fundamentals"):
         try:
             info = yf.Ticker(ticker).info
+            fcf = info.get("freeCashflow")
+            mktcap = info.get("marketCap")
+            fcf_yield = (fcf / mktcap) if (fcf and mktcap and mktcap > 0) else np.nan
+
             records.append(
                 {
                     "ticker": ticker,
@@ -60,7 +65,10 @@ def fetch_fundamentals(tickers: list[str], use_cache: bool = True) -> pd.DataFra
                     "roe": info.get("returnOnEquity"),
                     "revenue_growth": info.get("revenueGrowth"),
                     "debt_to_equity": info.get("debtToEquity"),
-                    "market_cap": info.get("marketCap"),
+                    "market_cap": mktcap,
+                    "fcf_yield": fcf_yield,
+                    "op_margin": info.get("operatingMargins"),
+                    "ev_ebitda": info.get("enterpriseToEbitda"),
                 }
             )
         except Exception as e:

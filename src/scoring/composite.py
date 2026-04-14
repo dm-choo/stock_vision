@@ -22,24 +22,39 @@ _OUTPUT_COLS = [
     "fundamental_score",
     "technical_score",
     "valid_factor_count",
-    # 펀더멘탈 세부
+    # 펀더멘탈 세부 (기존)
     "roe_score",
     "per_score",
     "pbr_score",
     "revenue_growth_score",
     "debt_to_equity_score",
-    # 기술적 세부
-    "mom_3m_score",
+    # 펀더멘탈 세부 (신규)
+    "fcf_yield_score",
+    "op_margin_score",
+    "ev_ebitda_score",
+    # 기술적 세부 (신규)
+    "mom_12_1_score",
+    "mom_3m_adj_score",
+    "consistency_score",
+    # 기술적 세부 (기존)
     "mom_6m_score",
     "rsi_score",
     "ma_score",
-    # 원본 지표값
+    # 원본 지표값 (기존)
     "per",
     "pbr",
     "roe",
     "revenue_growth",
     "debt_to_equity",
-    "mom_3m",
+    # 원본 지표값 (신규)
+    "fcf_yield",
+    "op_margin",
+    "ev_ebitda",
+    # 기술적 원본 (신규)
+    "mom_12_1",
+    "mom_3m_adj",
+    "consistency",
+    # 기술적 원본 (기존)
     "mom_6m",
     "rsi",
     "ma_signal",

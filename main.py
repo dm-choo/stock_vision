@@ -16,6 +16,12 @@ import argparse
 import pandas as pd
 
 from src.backtest.engine import run_backtest
+from src.backtest.validation import (
+    monte_carlo_significance,
+    print_monte_carlo_summary,
+    print_walk_forward_summary,
+    walk_forward_backtest,
+)
 from src.collectors import kr_collector, us_collector
 from src.factors.fundamental import compute_fundamental_scores
 from src.factors.technical import compute_technical_factors
@@ -106,6 +112,41 @@ def run_us_backtest(top_n: int = 20, mode: str = "technical") -> None:
     print(f"  분기별 수익률 저장: {out_path}")
 
 
+def run_us_validate(top_n: int = 20, mode: str = "technical") -> None:
+    """Walk-Forward 검증 + Monte Carlo 유의성 검정."""
+    print(f"\n[US 검증] mode={mode}, top_n={top_n}")
+
+    prices_5y_path = "data/us/prices_5y.parquet"
+    try:
+        prices = pd.read_parquet(prices_5y_path)
+        print(f"  가격 데이터: {prices.index[0].date()} ~ {prices.index[-1].date()}")
+    except FileNotFoundError:
+        print("  5년치 가격 데이터가 없습니다. data/us/prices_5y.parquet 를 준비하세요.")
+        return
+
+    # Walk-Forward 검증
+    print("\n  Walk-Forward 검증 실행 중...")
+    wf_df = walk_forward_backtest(
+        prices=prices,
+        train_quarters=8,
+        test_quarters=4,
+        step_quarters=2,
+        top_n=top_n,
+        mode=mode,
+    )
+    print_walk_forward_summary(wf_df)
+
+    out_path = f"data/us/walk_forward_{mode}.csv"
+    wf_df.to_csv(out_path, index=False)
+    print(f"  Walk-Forward 결과 저장: {out_path}")
+
+    # Monte Carlo 유의성 검정 (전체 기간 백테스트 기반)
+    print("\n  Monte Carlo 검정 실행 중...")
+    full_result = run_backtest(prices=prices, top_n=top_n, mode=mode)
+    mc = monte_carlo_significance(full_result.quarterly_portfolio, n_simulations=10_000)
+    print_monte_carlo_summary(mc)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Stock Vision — 주가 상승 가능성 스코어링 + 백테스트")
     parser.add_argument("--market", choices=["us", "kr"], required=True)
@@ -114,11 +155,17 @@ def main():
     parser.add_argument("--backtest", action="store_true", help="백테스트 실행")
     parser.add_argument("--backtest-mode", choices=["technical", "hybrid"], default="technical")
     parser.add_argument("--top-n", type=int, default=20, help="백테스트 포트폴리오 종목 수")
+    parser.add_argument("--validate", action="store_true", help="Walk-Forward + Monte Carlo 검증")
     args = parser.parse_args()
 
     use_cache = not args.no_cache
 
-    if args.backtest:
+    if args.validate:
+        if args.market == "us":
+            run_us_validate(top_n=args.top_n, mode=args.backtest_mode)
+        else:
+            print("[KR 검증] 아직 미구현입니다.")
+    elif args.backtest:
         if args.market == "us":
             run_us_backtest(top_n=args.top_n, mode=args.backtest_mode)
         else:
