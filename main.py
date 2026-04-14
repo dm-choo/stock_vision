@@ -143,8 +143,8 @@ def run_us_validate(top_n: int = 20, mode: str = "technical") -> None:
     # Monte Carlo 유의성 검정 (전체 기간 백테스트 기반)
     print("\n  Monte Carlo 검정 실행 중...")
     full_result = run_backtest(prices=prices, top_n=top_n, mode=mode)
-    mc = monte_carlo_significance(full_result.quarterly_portfolio, n_simulations=10_000)
-    print_monte_carlo_summary(mc)
+    mc = monte_carlo_significance(prices, full_result.quarterly_portfolio, top_n=top_n, n_simulations=5_000)
+    print_monte_carlo_summary(mc, n_simulations=5_000)
 
 
 def main():
