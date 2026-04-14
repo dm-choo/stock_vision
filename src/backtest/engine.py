@@ -49,8 +49,12 @@ class BacktestResult:
             f"  CAGR       : {m.get('cagr', float('nan')):.1%}  (벤치마크 {m.get('benchmark_cagr', float('nan')):.1%})",
             f"  Alpha      : {m.get('alpha', float('nan')):.1%}",
             f"  Sharpe     : {m.get('sharpe', float('nan')):.2f}  (벤치마크 {m.get('benchmark_sharpe', float('nan')):.2f})",
+            f"  Sortino    : {m.get('sortino', float('nan')):.2f}  (벤치마크 {m.get('benchmark_sortino', float('nan')):.2f})",
+            f"  Calmar     : {m.get('calmar', float('nan')):.2f}",
+            f"  IR         : {m.get('information_ratio', float('nan')):.2f}",
             f"  Max MDD    : {m.get('max_drawdown', float('nan')):.1%}  (벤치마크 {m.get('benchmark_mdd', float('nan')):.1%})",
             f"  Win Rate   : {m.get('win_rate', float('nan')):.1%} 분기 초과",
+            f"  Avg 턴오버  : {m.get('avg_turnover', float('nan')):.1%}  (비용 차감 {m.get('total_cost_drag', 0.0):.2%})",
         ]
         if self.mode == "hybrid":
             lines.append(f"  ⚠  펀더멘탈은 현재 데이터 사용 → look-ahead bias 존재")
@@ -103,20 +107,24 @@ def run_backtest(
     fund_weight: float = 0.60,
     tech_weight: float = 0.40,
     lookback_days: int = 300,
+    min_history_days: int = 252,
+    transaction_cost: float = 0.001,
 ) -> BacktestResult:
     """
     분기 리밸런싱 백테스트 실행.
 
     Args:
-        prices:          일별 종가 DataFrame (index=date, col=ticker)
-        top_n:           분기마다 매수할 상위 종목 수
-        start:           백테스트 시작일 (None이면 가격 데이터 시작 + lookback_days)
-        end:             백테스트 종료일 (None이면 가격 데이터 마지막 날)
-        mode:            'technical' | 'hybrid'
-        fundamentals:    hybrid 모드 시 필요한 현재 펀더멘탈 DataFrame
-        fund_weight:     hybrid 모드 시 펀더멘탈 가중치
-        tech_weight:     hybrid 모드 시 기술적 가중치
-        lookback_days:   기술적 지표 계산에 사용할 과거 창 크기 (최소 200 필요)
+        prices:            일별 종가 DataFrame (index=date, col=ticker)
+        top_n:             분기마다 매수할 상위 종목 수
+        start:             백테스트 시작일 (None이면 가격 데이터 시작 + lookback_days)
+        end:               백테스트 종료일 (None이면 가격 데이터 마지막 날)
+        mode:              'technical' | 'hybrid'
+        fundamentals:      hybrid 모드 시 필요한 현재 펀더멘탈 DataFrame
+        fund_weight:       hybrid 모드 시 펀더멘탈 가중치
+        tech_weight:       hybrid 모드 시 기술적 가중치
+        lookback_days:     기술적 지표 계산에 사용할 과거 창 크기 (최소 200 필요)
+        min_history_days:  리밸런싱 시점 기준 최소 거래일 수 (신규 상장 이상치 방지)
+        transaction_cost:  단방향 리밸런싱 거래비용 비율 (기본 0.1%)
 
     Returns:
         BacktestResult
@@ -138,6 +146,7 @@ def run_backtest(
     quarterly_port: dict[pd.Timestamp, float] = {}
     quarterly_bench: dict[pd.Timestamp, float] = {}
     holdings: list[dict] = []
+    turnover_ratios: list[float] = []
 
     # 벤치마크: 전체 유니버스 equal-weight
     universe_tickers = prices.columns.tolist()
@@ -149,6 +158,14 @@ def run_backtest(
         # 과거 창 (look-ahead 없이 rebal 시점까지만)
         window_start = rebal - pd.Timedelta(days=lookback_days * 2)
         price_window = prices.loc[window_start:rebal]
+
+        # IPO 필터: 리밸런싱 시점 기준 min_history_days 이상 거래일이 있는 종목만 허용
+        full_history = prices.loc[:rebal]
+        eligible = [
+            c for c in prices.columns
+            if full_history[c].dropna().shape[0] >= min_history_days
+        ]
+        price_window = price_window[eligible]
 
         # 기술적 점수 계산
         tech_scores = compute_technical_factors(price_window)
@@ -172,13 +189,24 @@ def run_backtest(
         if not selected:
             continue
 
-        # 분기 수익률 계산
-        port_ret = _period_return(prices, selected, rebal, next_rebal)
+        # 거래비용 계산: 직전 분기 대비 변경된 종목 비율 × transaction_cost
+        prev_tickers = holdings[-1]["tickers"] if holdings else []
+        turnover = len(set(selected).symmetric_difference(set(prev_tickers)))
+        cost_drag = (turnover / max(len(selected), 1)) * transaction_cost
+        turnover_ratios.append(turnover / max(len(selected), 1))
+
+        # 분기 수익률 계산 (거래비용 차감)
+        port_ret = _period_return(prices, selected, rebal, next_rebal) - cost_drag
         bench_ret = _period_return(prices, universe_tickers, rebal, next_rebal)
 
         quarterly_port[next_rebal] = port_ret
         quarterly_bench[next_rebal] = bench_ret
-        holdings.append({"date": rebal, "tickers": selected, "period_return": port_ret})
+        holdings.append({
+            "date": rebal,
+            "tickers": selected,
+            "period_return": port_ret,
+            "cost_drag": cost_drag,
+        })
 
     if not quarterly_port:
         raise ValueError("유효한 분기 수익률이 없습니다. 데이터와 기간을 확인하세요.")
@@ -190,6 +218,8 @@ def run_backtest(
     port_value, bench_value = _build_daily_value(prices, holdings, universe_tickers, rebal_dates)
 
     metrics = compute_all_metrics(port_value, bench_value, q_port, q_bench)
+    metrics["avg_turnover"] = float(sum(turnover_ratios) / len(turnover_ratios)) if turnover_ratios else float("nan")
+    metrics["total_cost_drag"] = float(sum(turnover_ratios) * transaction_cost) if turnover_ratios else 0.0
 
     return BacktestResult(
         mode=mode,
@@ -233,11 +263,19 @@ def _build_daily_value(
         if len(period_prices) < 2:
             continue
 
-        # 포트폴리오 일별 가치
+        # 포트폴리오 일별 가치 (기간 시작에 거래비용 차감)
         port_sub = period_prices[port_cols].dropna(axis=1, how="any")
         if not port_sub.empty:
-            for d, r in port_sub.pct_change().dropna(how="all").mean(axis=1).items():
-                prev_port *= (1 + r)
+            cost = h.get("cost_drag", 0.0)
+            daily_returns = port_sub.pct_change().dropna(how="all").mean(axis=1)
+            first = True
+            for d, r in daily_returns.items():
+                if first:
+                    # 첫 거래일에 비용 차감 (리밸런싱 실행일)
+                    prev_port *= (1 + r) * (1 - cost)
+                    first = False
+                else:
+                    prev_port *= (1 + r)
                 port_map[d] = prev_port
 
         # 벤치마크 일별 가치
