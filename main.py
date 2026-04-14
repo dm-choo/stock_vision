@@ -9,6 +9,9 @@ Stock Vision — 메인 실행 진입점
   uv run python main.py --market us --backtest         # 백테스트 실행 (technical 모드)
   uv run python main.py --market us --backtest --backtest-mode hybrid  # hybrid 모드
   uv run python main.py --market us --backtest --top-n 30              # 상위 30개로 백테스트
+  uv run python main.py --market us --predict                          # 다음 분기 수익률 예측 (clean 모드)
+  uv run python main.py --market us --predict --predict-mode research  # research 모드 (look-ahead 주의)
+  uv run python main.py --market us --predict --validate               # 예측 + CV 성능 평가
 """
 
 import argparse
@@ -25,6 +28,8 @@ from src.backtest.validation import (
 from src.collectors import kr_collector, us_collector
 from src.factors.fundamental import compute_fundamental_scores
 from src.factors.technical import compute_technical_factors
+from src.predictor.display import print_feature_importance, print_prediction_table
+from src.predictor.predictor import QuarterlyReturnPredictor
 from src.scoring.composite import compute_composite_score, print_top_n
 
 
@@ -147,6 +152,51 @@ def run_us_validate(top_n: int = 20, mode: str = "technical") -> None:
     print_monte_carlo_summary(mc, n_simulations=5_000)
 
 
+def run_us_predict(
+    top_n: int = 20,
+    mode: str = "clean",
+    model_type: str = "ridge",
+    use_cache: bool = True,
+    run_validate: bool = False,
+) -> None:
+    """다음 분기 수익률 예측 (분위 회귀)."""
+    print(f"\n[US 예측] mode={mode}, model={model_type}, top_n={top_n}")
+
+    prices_5y_path = "data/us/prices_5y.parquet"
+    try:
+        prices = pd.read_parquet(prices_5y_path)
+        print(f"  가격 데이터: {prices.index[0].date()} ~ {prices.index[-1].date()}")
+    except FileNotFoundError:
+        print("  5년치 가격 데이터가 없습니다. data/us/prices_5y.parquet 를 준비하세요.")
+        return
+
+    # 현재 기술적 점수 계산 (최신 가격 기준)
+    scores_path = "data/us/scores.csv"
+    try:
+        current_scores = pd.read_csv(scores_path)
+        print(f"  현재 스코어 로드: {len(current_scores)}개 종목 ({scores_path})")
+    except FileNotFoundError:
+        print(f"  스코어 파일({scores_path})이 없습니다. --market us 먼저 실행하세요.")
+        return
+
+    predictor = QuarterlyReturnPredictor(mode=mode, model_type=model_type)
+    predictor.fit(prices, use_cache=use_cache)
+
+    result = predictor.predict_top_n(current_scores, top_n=top_n)
+
+    cv_df = None
+    if run_validate:
+        print("\n  Walk-Forward CV 실행 중...")
+        cv_df = predictor.validate()
+
+    print_prediction_table(result, mode=mode, cv_df=cv_df)
+    print_feature_importance(predictor)
+
+    out_path = f"data/us/predictions_{mode}.csv"
+    result.to_csv(out_path, index=False)
+    print(f"  예측 결과 저장: {out_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Stock Vision — 주가 상승 가능성 스코어링 + 백테스트")
     parser.add_argument("--market", choices=["us", "kr"], required=True)
@@ -154,13 +204,29 @@ def main():
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--backtest", action="store_true", help="백테스트 실행")
     parser.add_argument("--backtest-mode", choices=["technical", "hybrid"], default="technical")
-    parser.add_argument("--top-n", type=int, default=20, help="백테스트 포트폴리오 종목 수")
-    parser.add_argument("--validate", action="store_true", help="Walk-Forward + Monte Carlo 검증")
+    parser.add_argument("--top-n", type=int, default=20, help="백테스트/예측 포트폴리오 종목 수")
+    parser.add_argument("--validate", action="store_true", help="Walk-Forward + Monte Carlo 검증 (백테스트) 또는 CV 성능 평가 (예측)")
+    parser.add_argument("--predict", action="store_true", help="다음 분기 수익률 예측")
+    parser.add_argument("--predict-mode", choices=["clean", "research"], default="clean",
+                        help="clean: 기술적 신호만 (기본) | research: +현재 펀더멘탈 (look-ahead 주의)")
+    parser.add_argument("--model-type", choices=["ridge", "gbm"], default="ridge",
+                        help="예측 모델 유형 (기본: ridge)")
     args = parser.parse_args()
 
     use_cache = not args.no_cache
 
-    if args.validate:
+    if args.predict:
+        if args.market == "us":
+            run_us_predict(
+                top_n=args.top_n,
+                mode=args.predict_mode,
+                model_type=args.model_type,
+                use_cache=use_cache,
+                run_validate=args.validate,
+            )
+        else:
+            print("[KR 예측] 아직 미구현입니다.")
+    elif args.validate:
         if args.market == "us":
             run_us_validate(top_n=args.top_n, mode=args.backtest_mode)
         else:

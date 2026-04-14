@@ -109,22 +109,25 @@ def run_backtest(
     lookback_days: int = 300,
     min_history_days: int = 252,
     transaction_cost: float = 0.001,
+    collect_universe_scores: bool = False,
 ) -> BacktestResult:
     """
     분기 리밸런싱 백테스트 실행.
 
     Args:
-        prices:            일별 종가 DataFrame (index=date, col=ticker)
-        top_n:             분기마다 매수할 상위 종목 수
-        start:             백테스트 시작일 (None이면 가격 데이터 시작 + lookback_days)
-        end:               백테스트 종료일 (None이면 가격 데이터 마지막 날)
-        mode:              'technical' | 'hybrid'
-        fundamentals:      hybrid 모드 시 필요한 현재 펀더멘탈 DataFrame
-        fund_weight:       hybrid 모드 시 펀더멘탈 가중치
-        tech_weight:       hybrid 모드 시 기술적 가중치
-        lookback_days:     기술적 지표 계산에 사용할 과거 창 크기 (최소 200 필요)
-        min_history_days:  리밸런싱 시점 기준 최소 거래일 수 (신규 상장 이상치 방지)
-        transaction_cost:  단방향 리밸런싱 거래비용 비율 (기본 0.1%)
+        prices:                  일별 종가 DataFrame (index=date, col=ticker)
+        top_n:                   분기마다 매수할 상위 종목 수
+        start:                   백테스트 시작일 (None이면 가격 데이터 시작 + lookback_days)
+        end:                     백테스트 종료일 (None이면 가격 데이터 마지막 날)
+        mode:                    'technical' | 'hybrid'
+        fundamentals:            hybrid 모드 시 필요한 현재 펀더멘탈 DataFrame
+        fund_weight:             hybrid 모드 시 펀더멘탈 가중치
+        tech_weight:             hybrid 모드 시 기술적 가중치
+        lookback_days:           기술적 지표 계산에 사용할 과거 창 크기 (최소 200 필요)
+        min_history_days:        리밸런싱 시점 기준 최소 거래일 수 (신규 상장 이상치 방지)
+        transaction_cost:        단방향 리밸런싱 거래비용 비율 (기본 0.1%)
+        collect_universe_scores: True이면 각 분기 전체 유니버스 기술적 점수를
+                                 holdings[i]["universe_scores"]에 저장 (예측 학습 데이터 수집용)
 
     Returns:
         BacktestResult
@@ -201,12 +204,22 @@ def run_backtest(
 
         quarterly_port[next_rebal] = port_ret
         quarterly_bench[next_rebal] = bench_ret
-        holdings.append({
+
+        holding_entry: dict = {
             "date": rebal,
             "tickers": selected,
             "period_return": port_ret,
             "cost_drag": cost_drag,
-        })
+        }
+        # 예측 학습 데이터 수집 모드: 전체 유니버스 기술적 점수 저장
+        if collect_universe_scores and not tech_scores.empty:
+            score_cols = ["technical_score", "mom_12_1_score", "mom_3m_adj_score",
+                          "mom_6m_score", "consistency_score", "rsi_score", "ma_score"]
+            available = [c for c in score_cols if c in tech_scores.columns]
+            holding_entry["universe_scores"] = (
+                tech_scores.set_index("ticker")[available].to_dict(orient="index")
+            )
+        holdings.append(holding_entry)
 
     if not quarterly_port:
         raise ValueError("유효한 분기 수익률이 없습니다. 데이터와 기간을 확인하세요.")
